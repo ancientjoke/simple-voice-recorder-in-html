@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: white;
+        }
+
+        .container {
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+        }
+
+        button {
+            padding: 12px 24px;
+            margin: 10px;
+            cursor: pointer;
+            border: 2px solid #000;
+            background-color: white;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background-color: #000;
+            color: white;
+        }
+
+        button:disabled {
+            border-color: #ccc;
+            color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .meter-container {
+            width: 100%;
+            height: 4px;
+            background-color: #eee;
+            margin: 20px auto;
+            overflow: hidden;
+        }
+
+        #meter {
+            height: 100%;
+            background-color: #000;
+            width: 0;
+            transition: width 0.1s ease;
+        }
+
+        .graph-container {
+            width: 100%;
+            height: 150px;
+            border: 2px solid #000;
+            margin: 20px 0;
+            position: relative;
+        }
+
+        .graph-bar {
+            position: absolute;
+            bottom: 0;
+            width: 2px;
+            background-color: #000;
+            transition: height 0.1s ease;
+        }
+
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            text-align: center;
+            border: 1px solid #000;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            button {
+                width: 100%;
+                margin: 5px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1></h1>
+        <div id="status"></div>
+        <div class="graph-container"></div>
+        <button id="recordButton">Start Recording</button>
+        <button id="stopButton" style="display: none;">Stop Recording</button>
+        <div class="meter-container">
+            <div id="meter"></div>
+        </div>
+        <div id="audio-container" style="display: none;">
+            <audio id="recordedAudio" controls></audio>
+        </div>
+    </div>
+
+    <script>
+        const recordButton = document.getElementById('recordButton');
+        const stopButton = document.getElementById('stopButton');
+        const meter = document.getElementById('meter');
+        const recordedAudio = document.getElementById('recordedAudio');
+        const audioContainer = document.getElementById('audio-container');
+        const graphContainer = document.querySelector('.graph-container');
+        const status = document.getElementById('status');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioContext;
+        let analyser;
+        let source;
+        let graphBars = [];
+        let animationFrame;
+
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = type;
+            status.style.display = 'block';
+            setTimeout(() => status.style.display = 'none', 3000);
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                analyser.fftSize = 2048;
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = (event) => audioChunks.push(event.data);
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    recordedAudio.src = audioUrl;
+                    audioContainer.style.display = 'block';
+                    recordButton.style.display = 'block';
+                    stopButton.style.display = 'none';
+                    showStatus('Recording saved successfully!', 'success');
+                    clearGraph();
+                };
+
+                mediaRecorder.start();
+                recordButton.style.display = 'none';
+                stopButton.style.display = 'block';
+                showStatus('Recording started', 'success');
+
+                function updateMeter() {
+                    analyser.getByteFrequencyData(dataArray);
+                    const average = Array.from(dataArray).reduce((a, b) => a + b) / bufferLength;
+                    const meterWidth = (average / 255) * 100;
+                    meter.style.width = `${meterWidth}%`;
+                    updateGraph(dataArray);
+                    animationFrame = requestAnimationFrame(updateMeter);
+                }
+                updateMeter();
+
+            } catch (error) {
+                showStatus('Error accessing microphone: ' + error.message, 'error');
+                console.error('Error accessing microphone:', error);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                if (source) {
+                    source.disconnect();
+                }
+                cancelAnimationFrame(animationFrame);
+            }
+        }
+
+        function updateGraph(dataArray) {
+            const barCount = Math.min(100, Math.floor(window.innerWidth / 5));
+            const barWidth = graphContainer.offsetWidth / barCount;
+            const maxAmplitude = 255;
+            const graphHeight = graphContainer.offsetHeight;
+
+            if (graphBars.length < barCount) {
+                clearGraph();
+                for (let i = 0; i < barCount; i++) {
+                    const bar = document.createElement('div');
+                    bar.classList.add('graph-bar');
+                    bar.style.left = `${i * barWidth}px`;
+                    bar.style.width = `${barWidth}px`;
+                    graphContainer.appendChild(bar);
+                    graphBars.push(bar);
+                }
+            }
+
+            for (let i = 0; i < barCount; i++) {
+                const dataIndex = Math.floor(i * dataArray.length / barCount);
+                const value = dataArray[dataIndex];
+                const barHeight = (value / maxAmplitude) * graphHeight;
+                graphBars[i].style.height = `${barHeight}px`;
+            }
+        }
+
+        function clearGraph() {
+            graphBars.forEach(bar => bar.remove());
+            graphBars = [];
+        }
+
+        recordButton.addEventListener('click', startRecording);
+        stopButton.addEventListener('click', stopRecording);
+        window.addEventListener('resize', () => {
+            clearGraph();
+        });
+    </script>
+</body>
+</html>
